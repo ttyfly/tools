@@ -200,39 +200,71 @@ class AssetExplorer(object):
             print('Error')
 
 
-def repair_ref_images(tree: AssetTree, doc_node: AssetNode):
+def list_refs(doc_node: AssetNode):
+    if doc_node.type != AssetType.Document:
+        print('%s is not a document node.' % doc_node.name)
+        return
+
+    matcher = re.compile(r'\[.*\]\((.*)\)')
+
+    with open(doc_node.abspath, encoding='utf-8') as f:
+        print('{:^4}  {:^8}  {}'.format('Line', 'Status', 'Path'))
+        for i, line in enumerate(f):
+            matched = matcher.match(line)
+
+            if matched is None:
+                continue
+
+            if matched[1].startswith('http'):
+                status = 'OK'
+            else:
+                path = unquote(matched[1])
+                ref_node = doc_node.parent.find_ref_node(path.replace('\\', '/'))
+                status = 'OK' if ref_node is not None else 'Down'
+
+            print('{:>4}  {:^8}  {}'.format(i, status, path))
+
+
+def repair_refs(tree: AssetTree, doc_node: AssetNode):
+    if doc_node.type != AssetType.Document:
+        print('%s is not a document node.' % doc_node.name)
+        return
+
     print('repairing', doc_node.abspath)
     swap_filepath = doc_node.abspath + '.swap'
     backup_file_path = doc_node.abspath + '.bak'
-    matcher = re.compile(r'!\[.*\]\((.*)\)')
+    matcher = re.compile(r'\[.*\]\((.*)\)')
 
-    def repair_ref(matched: re.Match):
-        path = matched[1]
+    def repair_ref(ref: str):
+        if ref.startswith('http'):
+            return ref, 'OK'
 
-        ref_node = doc_node.find_ref_node(unquote(path).replace('\\', '/'))
+        ref_node = doc_node.parent.find_ref_node(unquote(ref).replace('\\', '/'))
         if ref_node is not None:
-            return matched[0]
+            return ref, 'OK'
 
-        nearest_nodes = doc_node.find_nearest(unquote(os.path.basename(path)), tree)
+        nearest_nodes = doc_node.find_nearest(unquote(os.path.basename(ref)), tree)
         if len(nearest_nodes) == 0:
-            return matched[0]
+            return ref, 'NOT FOUND'
         elif len(nearest_nodes) == 1:
-            return matched[0].replace(path, quote(doc_node.get_ref_path(nearest_nodes[0])))
+            return quote(doc_node.get_ref_path(nearest_nodes[0])), 'REPAIRED'
 
         for node in nearest_nodes:
             if doc_node.name.split('.')[0] in node.abspath:
-                return matched[0].replace(path, quote(doc_node.get_ref_path(node)))
+                return quote(doc_node.get_ref_path(node)), 'REPAIRED'
 
-        return matched[0]
+        return ref, 'MULTIPLE FOUND'
 
     with open(doc_node.abspath, encoding='utf-8') as read_f, open(swap_filepath, 'w', encoding='utf-8') as write_f:
+        print('{:^4}  {:^16}  {}'.format('Line', 'Status', 'Change'))
         for i, line in enumerate(read_f):
             matched = matcher.match(line)
             if matched is not None:
-                repaired = repair_ref(matched)
-                if matched[0] != repaired:
-                    print(str(i).rjust(3), '|', matched[0], '->', repaired)
-                    line = line.replace(matched[0], repaired)
+                repaired, status = repair_ref(matched[1])
+                change = '' if status == 'OK' else matched[1] + ' -> ' + repaired
+                print('{:>4}  {:^16}  {}'.format(i, status, change))
+                if status != 'OK':
+                    line = line.replace(matched[0], matched[0].replace(matched[1], repaired))
             write_f.write(line)
 
     if os.path.exists(backup_file_path):
@@ -256,7 +288,9 @@ if __name__ == '__main__':
             break
         elif cmd[0] in ['change-node', 'cn'] and len(cmd) == 2:
             explorer.cmd_change_node(cmd[1])
-        elif cmd[0] in ['repair-ref-images', 'rri'] and len(cmd) == 1:
-            repair_ref_images(tree, explorer.current)
+        elif cmd[0] in ['repair-refs', 'rr'] and len(cmd) == 1:
+            repair_refs(tree, explorer.current)
+        elif cmd[0] in ['list-refs', 'lr'] and len(cmd) == 1:
+            list_refs(explorer.current)
         else:
             print('Error')
